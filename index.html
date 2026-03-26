@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Indodax Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: { colors: { bg: '#0a0a0a', card: '#141414', border: '#222' } } }
+    }
+  </script>
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .glow { box-shadow: 0 0 20px rgba(59,130,246,0.15); }
+    .fade-in { animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+    .btn-active { background: linear-gradient(135deg, #3b82f6, #8b5cf6); }
+  </style>
+</head>
+<body class="bg-bg text-gray-200 min-h-screen">
+
+<!-- Header -->
+<header class="fixed top-0 w-full bg-bg/80 backdrop-blur-lg border-b border-border z-50 px-4 py-3">
+  <div class="max-w-6xl mx-auto flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <span class="text-2xl">📊</span>
+      <h1 class="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">Indodax Tracker</h1>
+    </div>
+    <div id="status" class="text-xs text-gray-500">Ready</div>
+  </div>
+</header>
+
+<main class="pt-20 pb-8 px-4 max-w-6xl mx-auto">
+
+<!-- Quick Actions -->
+<section class="mb-6">
+  <div class="flex flex-wrap gap-2">
+    <button onclick="startTracking()" class="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-medium transition">▶ Start</button>
+    <button onclick="loadMarket()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium transition">📊 Market</button>
+    <button onclick="loadTop()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-medium transition">🔺 Top 20</button>
+    <button onclick="loadLow()" class="px-4 py-2 bg-red-600 hover:bg-red-500 rounded-lg font-medium transition">🔻 Low 20</button>
+    <button onclick="loadTimeframe('10m')" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg font-medium transition">⏱ 10m</button>
+    <button onclick="loadTimeframe('1h')" class="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg font-medium transition">⏱ 1h</button>
+    <button onclick="loadTimeframe('24h')" class="px-4 py-2 bg-pink-600 hover:bg-pink-500 rounded-lg font-medium transition">⏱ 24h</button>
+    <button onclick="resetTracking()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition">🔄 Reset</button>
+  </div>
+</section>
+
+<!-- Coin Search -->
+<section class="mb-6">
+  <div class="flex gap-2">
+    <input id="coinInput" type="text" placeholder="Cari koin (btc, eth, sol...)" 
+      class="flex-1 px-4 py-2 bg-card border border-border rounded-lg focus:outline-none focus:border-blue-500"
+      onkeydown="if(event.key==='Enter')searchCoin()">
+    <button onclick="searchCoin()" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium transition">🔍 Cari</button>
+  </div>
+</section>
+
+<!-- Info Card -->
+<div id="infoCard" class="hidden mb-6 bg-card border border-border rounded-xl p-4 glow fade-in">
+  <div id="infoContent"></div>
+</div>
+
+<!-- Main Content -->
+<div id="mainContent" class="bg-card border border-border rounded-xl overflow-hidden">
+  <div class="p-8 text-center text-gray-500">
+    <div class="text-4xl mb-2">📊</div>
+    <p>Klik <b>Start</b> untuk mulai tracking harga</p>
+    <p class="text-sm mt-1">Semua perubahan harga dihitung dari saat Start</p>
+  </div>
+</div>
+
+<!-- Loading -->
+<div id="loading" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+  <div class="bg-card rounded-xl p-6 text-center">
+    <div class="text-3xl mb-2 animate-pulse">⏳</div>
+    <p>Loading...</p>
+  </div>
+</div>
+
+</main>
+
+<script>
+// ─── State ───
+let baseline = null;
+let snapshots = { '10m': null, '1h': null, '24h': null };
+const API = 'https://indodax.com/api';
+
+// ─── Helpers ───
+function rupiah(n) { return 'Rp ' + Number(n).toLocaleString('id-ID'); }
+function pct(v) { return (v >= 0 ? '+' : '') + v.toFixed(2) + '%'; }
+function status(t) { document.getElementById('status').textContent = t; }
+function showLoading(v) { document.getElementById('loading').classList.toggle('hidden', !v); }
+
+async function fetchSummaries() {
+  const res = await fetch(`${API}/summaries`);
+  return res.json();
+}
+
+async function fetchTicker(pair) {
+  const res = await fetch(`${API}/ticker/${pair}`);
+  return res.json();
+}
+
+function getChanges(ref, cur) {
+  const rT = ref.tickers || {}, cT = cur.tickers || {};
+  const changes = [];
+  for (const [pair, r] of Object.entries(rT)) {
+    const c = cT[pair]; if (!c) continue;
+    const rp = parseFloat(r.last || 0), cp = parseFloat(c.last || 0);
+    if (rp < 1 || cp < 1) continue;
+    changes.push({
+      pair, name: c.name || pair.replace('_idr', '').toUpperCase(),
+      ref: rp, now: cp, pct: ((cp - rp) / rp) * 100,
+      high: parseFloat(c.high || 0), low: parseFloat(c.low || 0),
+      vol: parseFloat(c.vol_idr || 0)
+    });
+  }
+  return changes.sort((a, b) => b.pct - a.pct);
+}
+
+// ─── Actions ───
+async function startTracking() {
+  showLoading(true); status('Starting...');
+  try {
+    const data = await fetchSummaries();
+    baseline = data;
+    snapshots = { '10m': data, '1h': data, '24h': data };
+    const count = Object.keys(data.tickers || {}).length;
+    showInfo('✅ Tracking Started', `${count} koin tercatat pada ${new Date().toLocaleString('id-ID')}`);
+    status('Tracking active');
+    loadMarket();
+  } catch (e) { showInfo('❌ Error', e.message); }
+  showLoading(false);
+}
+
+async function loadMarket() {
+  if (!baseline) return showInfo('⚠️ Info', 'Klik Start dulu');
+  showLoading(true); status('Loading market...');
+  try {
+    const cur = await fetchSummaries();
+    const ch = getChanges(baseline, cur);
+    const top = ch.slice(0, 10), bot = ch.slice(-10).reverse();
+    const g = ch.filter(c => c.pct > 0).length, l = ch.filter(c => c.pct < 0).length;
+
+    let html = '<h2 class="text-lg font-bold mb-4">📊 Market Overview</h2>';
+    html += `<p class="text-sm text-gray-400 mb-4">${ch.length} koin · ${g} naik · ${l} turun</p>`;
+
+    html += '<div class="grid md:grid-cols-2 gap-4">';
+    
+    // Gainers
+    html += '<div><h3 class="text-green-400 font-semibold mb-2">🟢 Top 10 Naik</h3>';
+    top.forEach((c, i) => {
+      html += `<div class="flex justify-between items-center py-1.5 border-b border-border/50">
+        <span class="text-sm">${i+1}. ${c.name}</span>
+        <span class="text-green-400 font-mono text-sm font-bold">${pct(c.pct)}</span>
+      </div>`;
+    });
+    html += '</div>';
+
+    // Losers
+    html += '<div><h3 class="text-red-400 font-semibold mb-2">🔴 Top 10 Turun</h3>';
+    bot.forEach((c, i) => {
+      html += `<div class="flex justify-between items-center py-1.5 border-b border-border/50">
+        <span class="text-sm">${i+1}. ${c.name}</span>
+        <span class="text-red-400 font-mono text-sm font-bold">${pct(c.pct)}</span>
+      </div>`;
+    });
+    html += '</div></div>';
+
+    if (ch.length) {
+      html += `<div class="mt-4 p-3 bg-green-900/20 rounded-lg text-sm">🏆 ${ch[0].name} <span class="text-green-400">${pct(ch[0].pct)}</span></div>`;
+      html += `<div class="mt-2 p-3 bg-red-900/20 rounded-lg text-sm">💀 ${ch[ch.length-1].name} <span class="text-red-400">${pct(ch[ch.length-1].pct)}</span></div>`;
+    }
+
+    setContent(html); status('Market loaded');
+  } catch (e) { showInfo('❌ Error', e.message); }
+  showLoading(false);
+}
+
+async function loadTop() {
+  if (!baseline) return showInfo('⚠️ Info', 'Klik Start dulu');
+  showLoading(true); status('Loading top...');
+  try {
+    const cur = await fetchSummaries();
+    const ch = getChanges(baseline, cur).filter(c => c.pct > 0).slice(0, 20);
+
+    let html = '<h2 class="text-lg font-bold mb-4">🔺 Top 20 Gainers</h2>';
+    ch.forEach((c, i) => {
+      html += `<div class="flex justify-between items-center py-2 border-b border-border/50">
+        <div><span class="text-gray-500 mr-2">${i+1}.</span>${c.name}<div class="text-xs text-gray-500">${rupiah(c.ref)} → ${rupiah(c.now)}</div></div>
+        <span class="text-green-400 font-mono font-bold">${pct(c.pct)}</span>
+      </div>`;
+    });
+    setContent(html); status('Top loaded');
+  } catch (e) { showInfo('❌ Error', e.message); }
+  showLoading(false);
+}
+
+async function loadLow() {
+  if (!baseline) return showInfo('⚠️ Info', 'Klik Start dulu');
+  showLoading(true); status('Loading low...');
+  try {
+    const cur = await fetchSummaries();
+    const ch = getChanges(baseline, cur).filter(c => c.pct < 0).slice(-20).reverse();
+
+    let html = '<h2 class="text-lg font-bold mb-4">🔻 Top 20 Losers</h2>';
+    ch.forEach((c, i) => {
+      html += `<div class="flex justify-between items-center py-2 border-b border-border/50">
+        <div><span class="text-gray-500 mr-2">${i+1}.</span>${c.name}<div class="text-xs text-gray-500">${rupiah(c.ref)} → ${rupiah(c.now)}</div></div>
+        <span class="text-red-400 font-mono font-bold">${pct(c.pct)}</span>
+      </div>`;
+    });
+    setContent(html); status('Low loaded');
+  } catch (e) { showInfo('❌ Error', e.message); }
+  showLoading(false);
+}
+
+async function loadTimeframe(tf) {
+  if (!baseline) return showInfo('⚠️ Info', 'Klik Start dulu');
+  showLoading(true); status(`Loading ${tf}...`);
+  const label = { '10m': '10 Menit', '1h': '1 Jam', '24h': '24 Jam' }[tf];
+  try {
+    const cur = await fetchSummaries();
+    const ref = snapshots[tf] || baseline;
+    const ch = getChanges(ref, cur);
+    const up = ch.filter(c => c.pct > 0).slice(0, 10);
+    const down = ch.filter(c => c.pct < 0).slice(0, 10);
+
+    let html = `<h2 class="text-lg font-bold mb-4">⏱ Perubahan ${label}</h2>`;
+    html += '<div class="grid md:grid-cols-2 gap-4">';
+    html += '<div><h3 class="text-green-400 font-semibold mb-2">🟢 Naik</h3>';
+    up.forEach((c, i) => {
+      html += `<div class="flex justify-between py-1.5 border-b border-border/50 text-sm">
+        <span>${i+1}. ${c.name}</span><span class="text-green-400 font-mono font-bold">${pct(c.pct)}</span></div>`;
+    });
+    html += '</div><div><h3 class="text-red-400 font-semibold mb-2">🔴 Turun</h3>';
+    down.forEach((c, i) => {
+      html += `<div class="flex justify-between py-1.5 border-b border-border/50 text-sm">
+        <span>${i+1}. ${c.name}</span><span class="text-red-400 font-mono font-bold">${pct(c.pct)}</span></div>`;
+    });
+    html += '</div></div>';
+    setContent(html); status(`${label} loaded`);
+  } catch (e) { showInfo('❌ Error', e.message); }
+  showLoading(false);
+}
+
+async function searchCoin() {
+  const coin = document.getElementById('coinInput').value.trim().toLowerCase();
+  if (!coin) return;
+  showLoading(true); status(`Searching ${coin}...`);
+  try {
+    const data = await fetchTicker(`${coin}_idr`);
+    if (!data.ticker) return showInfo('❌ Not Found', `'${coin.toUpperCase()}' tidak ditemukan`);
+    const t = data.ticker;
+    const p = parseFloat(t.last || 0), buy = parseFloat(t.buy || 0), sell = parseFloat(t.sell || 0);
+    const h = parseFloat(t.high || 0), l = parseFloat(t.low || 0), vol = parseFloat(t.vol_idr || 0);
+
+    let html = `<h2 class="text-lg font-bold mb-4">📊 ${t.name || coin.toUpperCase()}/IDR</h2>`;
+    html += `<div class="text-3xl font-bold mb-2">${rupiah(p)}</div>`;
+    html += `<div class="text-sm text-gray-400 mb-4">Beli: ${rupiah(buy)} | Jual: ${rupiah(sell)}</div>`;
+
+    if (h > 0 && l > 0) {
+      const range = ((h - l) / l * 100).toFixed(1);
+      const pos = ((p - l) / (h - l) * 100).toFixed(0);
+      html += `<div class="grid grid-cols-3 gap-4 mb-4 text-center">
+        <div class="bg-green-900/20 p-3 rounded-lg"><div class="text-xs text-gray-400">High 24h</div><div class="text-green-400 font-mono">${rupiah(h)}</div></div>
+        <div class="bg-gray-800 p-3 rounded-lg"><div class="text-xs text-gray-400">Range</div><div class="font-mono">${range}%</div></div>
+        <div class="bg-red-900/20 p-3 rounded-lg"><div class="text-xs text-gray-400">Low 24h</div><div class="text-red-400 font-mono">${rupiah(l)}</div></div>
+      </div>`;
+      // Progress bar
+      html += `<div class="w-full bg-gray-800 rounded-full h-2 mb-1"><div class="bg-blue-500 h-2 rounded-full" style="width:${pos}%"></div></div>`;
+      html += `<div class="flex justify-between text-xs text-gray-500"><span>Low</span><span>${pos}%</span><span>High</span></div>`;
+    }
+
+    // Baseline comparison
+    if (baseline?.tickers?.[`${coin}_idr`]) {
+      const bp = parseFloat(baseline.tickers[`${coin}_idr`].last || 0);
+      if (bp > 0) {
+        const pc = ((p - bp) / bp * 100);
+        const color = pc >= 0 ? 'text-green-400' : 'text-red-400';
+        html += `<div class="mt-4 p-3 bg-gray-800 rounded-lg">
+          <div class="text-xs text-gray-400">Dari Baseline</div>
+          <div class="${color} font-mono font-bold">${pct(pc)}</div>
+          <div class="text-xs text-gray-500">${rupiah(bp)} → ${rupiah(p)}</div>
+        </div>`;
+      }
+    }
+
+    if (vol > 0) html += `<div class="mt-3 text-sm text-gray-400">📦 Volume 24h: ${rupiah(vol)}</div>`;
+
+    setContent(html); status(`${coin.toUpperCase()} loaded`);
+  } catch (e) { showInfo('❌ Error', e.message); }
+  showLoading(false);
+}
+
+function resetTracking() {
+  baseline = null;
+  snapshots = { '10m': null, '1h': null, '24h': null };
+  document.getElementById('mainContent').innerHTML = `
+    <div class="p-8 text-center text-gray-500">
+      <div class="text-4xl mb-2">🔄</div>
+      <p>Reset berhasil. Klik <b>Start</b> untuk mulai lagi.</p>
+    </div>`;
+  showInfo('🔄 Reset', 'Baseline dihapus');
+  status('Reset done');
+}
+
+// ─── UI Helpers ───
+function showInfo(title, msg) {
+  const card = document.getElementById('infoCard');
+  document.getElementById('infoContent').innerHTML = `<h3 class="font-bold">${title}</h3><p class="text-sm text-gray-400 mt-1">${msg}</p>`;
+  card.classList.remove('hidden');
+  setTimeout(() => card.classList.add('hidden'), 5000);
+}
+
+function setContent(html) {
+  document.getElementById('mainContent').innerHTML = `<div class="p-4 fade-in">${html}</div>`;
+}
+
+// ─── Auto-refresh snapshot (every 10 min) ───
+setInterval(() => {
+  if (baseline) {
+    fetchSummaries().then(data => {
+      snapshots['10m'] = snapshots['1h'] = data;
+    }).catch(() => {});
+  }
+}, 600000);
+</script>
+
+</body>
+</html>
