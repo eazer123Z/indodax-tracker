@@ -86,7 +86,7 @@
 // ─── State ───
 let baseline = null;
 let snapshots = { '10m': null, '1h': null, '24h': null };
-const API = 'https://indodax.com/api';
+const API = '/api/proxy';
 
 // ─── Helpers ───
 function rupiah(n) { return 'Rp ' + Number(n).toLocaleString('id-ID'); }
@@ -95,12 +95,12 @@ function status(t) { document.getElementById('status').textContent = t; }
 function showLoading(v) { document.getElementById('loading').classList.toggle('hidden', !v); }
 
 async function fetchSummaries() {
-  const res = await fetch(`${API}/summaries`);
+  const res = await fetch(`${API}?endpoint=summaries`);
   return res.json();
 }
 
 async function fetchTicker(pair) {
-  const res = await fetch(`${API}/ticker/${pair}`);
+  const res = await fetch(`${API}?endpoint=ticker/${pair}`);
   return res.json();
 }
 
